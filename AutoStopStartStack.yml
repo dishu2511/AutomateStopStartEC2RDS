@@ -1,0 +1,810 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: AWS Cloudformation template which deploys the fully automated EC2,RDS instance scheduler. This stack can perform Shutdown, Start, Notification and Tagging of the resources.
+Metadata: 
+  AWS::CloudFormation::Interface: 
+    ParameterGroups: 
+      - 
+        Label:
+          default: "Tagging"
+        Parameters:
+          - EnvName
+          - ShutdownTagKey
+          - ShutdownTagValueTrue
+          - ShutdownTagValueFalse
+          - StartTagKey
+          - StartTagValueTrue
+          - StartTagValueFalse
+      -
+        Label:
+          default: "Scheduling & Alert"
+        Parameters:
+          - SNSEmailSubscription
+          - NotifyResourceScheduleExpression
+          - ResourceShutdownScheduleExpression
+          - ResourceStartScheduleExpression
+          - TagResourceScheduleExpression
+          - ShutdownEventState
+          - StartEventState
+          - NotifyEventState
+          - TagEventState
+Parameters:
+  EnvName:
+    Type: String
+    Description: Name of an environment. 'dev', 'staging', 'prod' and any name.
+    AllowedPattern: ^.*[^0-9]$
+    ConstraintDescription: Must end with non-numeric character.
+  ShutdownTagKey:
+    Type: String
+    Default: AutoShutdown
+    Description: Shutdown tag key name. 
+    AllowedPattern: "^[a-zA-Z0-9]*$"
+  ShutdownTagValueTrue:
+    Type: String
+    Default: 'True'
+    Description: Shutdown tag key value.
+    AllowedPattern: "^[a-zA-Z0-9]*$"
+  ShutdownTagValueFalse:
+    Type: String
+    Default: 'False'
+    Description: Shutdown tag key value.
+    AllowedPattern: "^[a-zA-Z0-9]*$"
+  StartTagKey:
+    Type: String
+    Default: AutoStart
+    Description: Shutdown tag key name. 
+    AllowedPattern: "^[a-zA-Z0-9]*$"
+  StartTagValueTrue:
+    Type: String
+    Default: 'True'
+    Description: Shutdown tag key value.
+    AllowedPattern: "^[a-zA-Z0-9]*$"
+  StartTagValueFalse:
+    Type: String
+    Default: 'False'
+    Description: Shutdown tag key value.
+    AllowedPattern: "^[a-zA-Z0-9]*$"
+  SNSEmailSubscription:
+    Type: String
+    Description: Email address for SNS Subscription
+    AllowedPattern: ^.*[^0-9]$
+  ResourceShutdownScheduleExpression:
+    Type: String
+    Description: Cron expression to schedule the shutdown of resources
+    Default: "cron(0 9 * * ? *)"
+  ResourceStartScheduleExpression:
+    Type: String
+    Description: Cron expression to schedule the start of resources
+    Default: "cron(0 18 ? * Sun-Thu *)"
+  NotifyResourceScheduleExpression:
+    Type: String
+    Description: Cron expression to schedule the notification email for running resources
+    Default: "cron(0 10 ? * * *)"
+  TagResourceScheduleExpression:
+    Type: String
+    Description: Cron expression to schedule the lambda which does the tagging
+    Default: "cron(0 8 ? * * *)"
+  ShutdownEventState:
+    Type: String
+    Description: Cloudwatch event which triggers shutdown function
+    Default: ENABLED
+    AllowedValues:
+      - ENABLED
+      - DISABLED
+  StartEventState:
+    Type: String
+    Description: Cloudwatch event which triggers start function
+    Default: ENABLED
+    AllowedValues:
+      - ENABLED
+      - DISABLED
+  NotifyEventState:
+    Type: String
+    Description: Cloudwatch event which triggers notification function
+    Default: ENABLED
+    AllowedValues:
+      - ENABLED
+      - DISABLED
+  TagEventState:
+    Type: String
+    Description: Cloudwatch event which triggers tagging function
+    Default: DISABLED
+    AllowedValues:
+      - 'ENABLED'
+      - 'DISABLED'
+Outputs:
+  LambdaRoleARN:
+    Description: Role for Lambda execution.
+    Value:
+      Fn::GetAtt:
+        - LambdaRole
+        - Arn
+    Export:
+      Name:
+        Fn::Sub: LambdaRole
+  ShutdownLambdaFunctionName:
+    Value:
+      Ref: ShutdownLambdaFunction
+  ShutdownLambdaFunctionARN:
+    Description: Lambda function ARN.
+    Value:
+      Fn::GetAtt:
+        - ShutdownLambdaFunction
+        - Arn
+    Export:
+      Name:
+        Fn::Sub: ShutdownLambdaFunction
+  StartLambdaFunctionName:
+    Value:
+      Ref: StartLambdaFunction
+  StartLambdaFunctionARN:
+    Description: Lambda function ARN.
+    Value:
+      Fn::GetAtt:
+        - StartLambdaFunction
+        - Arn
+    Export:
+      Name:
+        Fn::Sub: StartLambdaFunction
+  NotifyLambdaFunctionName:
+    Value:
+      Ref: NotifyLambdaFunction
+  NotifyLambdaFunctionARN:
+    Description: Lambda function ARN.
+    Value:
+      Fn::GetAtt:
+        - NotifyLambdaFunction
+        - Arn
+    Export:
+      Name:
+        Fn::Sub: NotifyLambdaFunction
+  TagLambdaFunctionName:
+    Value:
+      Ref: NotifyLambdaFunction
+  TagLambdaFunctionARN:
+    Description: Lambda function ARN.
+    Value:
+      Fn::GetAtt:
+        - TagLambdaFunction
+        - Arn
+    Export:
+      Name:
+        Fn::Sub: TagLambdaFunction
+  SNSTopicName:
+    Value:
+      Ref: SNSTopic
+  
+Resources:
+  ShutdownLambdaFunctionSchedule:
+    Type: AWS::Events::Rule
+    Properties: 
+      Description: Cloudwatch event to trigger a Lambda which does the shutdown of EC2,RDS instances based on the tags
+      Name: AutoShutdownEC2RDS
+      ScheduleExpression: !Ref ResourceShutdownScheduleExpression
+      State: !Ref ShutdownEventState
+      Targets: 
+        - Arn: 
+            Fn::GetAtt:
+              - ShutdownLambdaFunction
+              - Arn
+          Id: ShutdownLambdaFunctionSchedule
+  ShutdownLambdaFunctionSchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties: 
+      FunctionName: 
+        Ref: "ShutdownLambdaFunction"
+      Action: "lambda:InvokeFunction"
+      Principal: "events.amazonaws.com"
+      SourceArn: 
+        Fn::GetAtt: 
+          - "ShutdownLambdaFunctionSchedule"
+          - "Arn"
+  StartLambdaFunctionSchedule:
+    Type: AWS::Events::Rule
+    Properties: 
+      Description: Cloudwatch event to trigger a Lambda which powers on EC2,RDS instances based on the tags
+      Name: AutoStartEC2RDS
+      ScheduleExpression: !Ref ResourceStartScheduleExpression
+      State: !Ref StartEventState
+      Targets: 
+        - Arn: 
+            Fn::GetAtt:
+              - StartLambdaFunction
+              - Arn
+          Id: StartLambdaFunctionSchedule
+  StartLambdaFunctionSchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties: 
+      FunctionName: 
+        Ref: "StartLambdaFunction"
+      Action: "lambda:InvokeFunction"
+      Principal: "events.amazonaws.com"
+      SourceArn: 
+        Fn::GetAtt: 
+          - "StartLambdaFunctionSchedule"
+          - "Arn"
+  NotifyLambdaFunctionSchedule:
+    Type: AWS::Events::Rule
+    Properties: 
+      Description: Cloudwatch event to trigger a Lambda which sends an email to notify running resources
+      Name: NotifyRunningEC2RDS
+      ScheduleExpression: !Ref NotifyResourceScheduleExpression
+      State: !Ref NotifyEventState
+      Targets: 
+        - Arn: 
+            Fn::GetAtt:
+              - NotifyLambdaFunction
+              - Arn
+          Id: NotifyLambdaFunctionSchedule
+  NotifyLambdaFunctionSchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties: 
+      FunctionName: 
+        Ref: "NotifyLambdaFunction"
+      Action: "lambda:InvokeFunction"
+      Principal: "events.amazonaws.com"
+      SourceArn: 
+        Fn::GetAtt: 
+          - "NotifyLambdaFunctionSchedule"
+          - "Arn"
+
+  TagLambdaFunctionSchedule:
+    Type: AWS::Events::Rule
+    Properties: 
+      Description: Cloudwatch event to trigger a Lambda which tags EC2, RDS instances
+      Name: AutoTagEC2RDS
+      ScheduleExpression: !Ref TagResourceScheduleExpression
+      State: !Ref TagEventState
+      Targets: 
+        - Arn: 
+            Fn::GetAtt:
+              - TagLambdaFunction
+              - Arn
+          Id: TagLambdaFunctionSchedule
+  TagLambdaFunctionSchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties: 
+      FunctionName: 
+        Ref: "TagLambdaFunction"
+      Action: "lambda:InvokeFunction"
+      Principal: "events.amazonaws.com"
+      SourceArn: 
+        Fn::GetAtt: 
+          - "TagLambdaFunctionSchedule"
+          - "Arn"
+  SNSTopic:
+    Type: AWS::SNS::Topic
+    Properties: 
+      DisplayName: "Running Instances Notifications"
+      Subscription: 
+        - Endpoint: !Ref SNSEmailSubscription
+          Protocol: "email"
+      TopicName: NotifyRunningEC2RDS
+  SNSRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName:
+        Fn::Sub: NotifyingRunningEC2RDSRole
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action:
+            - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+              - lambda.amazonaws.com
+        Version: 2012-10-17
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Path: /
+      Policies:
+        - PolicyName: NotifyRunningEC2RDSPolicy
+          PolicyDocument:
+            Statement:
+              - Action:
+                - rds:Describe*
+                - rds:List*
+                - rds:AddTagsToResource
+                - rds:StartDBInstance
+                - rds:StartDBCluster
+                - rds:StopDBInstance
+                - rds:StopDBCluster
+                - sns:ListTagsForResource
+                - sns:ListSubscriptionsByTopic
+                - sns:Publish
+                - sns:GetEndpointAttributes
+                - sns:GetPlatformApplicationAttributes
+                - sns:ListTopics
+                - sns:ListSubscriptions
+                - ec2:DescribeInstances
+                Effect: Allow
+                Resource: "*"
+            Version: '2012-10-17'
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName:
+        Fn::Sub: ShutdownStartEC2RDSRole
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action:
+            - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+              - lambda.amazonaws.com
+        Version: 2012-10-17
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Path: /
+      Policies:
+        - PolicyName: ShutdownStartEC2RDSPolicy
+          PolicyDocument:
+            Statement:
+              - Action:
+                - rds:Describe*
+                - rds:List*
+                - rds:AddTagsToResource
+                - rds:StartDBInstance
+                - rds:StartDBCluster
+                - rds:StopDBInstance
+                - rds:StopDBCluster
+                - rds:RemoveTagsFromResource
+                - ec2:DescribeInstance*
+                - ec2:CreateTags
+                - ec2:DescribeTags
+                - ec2:CreateTags
+                - ec2:DeleteTags
+                - ec2:StopInstances
+                - ec2:StartInstances
+                - kms:RetireGrant
+                - kms:CreateGrant
+                - kms:ReEncrypt*
+                - kms:GenerateDataKey*
+                - kms:Encrypt
+                - kms:DescribeKey
+                - kms:Decrypt
+                Effect: Allow
+                Resource: "*"
+            Version: '2012-10-17'
+  ShutdownLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName:
+        Fn::Sub: AutoShutdownEC2RDS-${EnvName}
+      Description: LambdaFunction to Auto Shutdown EC2 & RDS
+      Runtime: python3.7
+      Code:
+        ZipFile: |
+          import boto3
+          import os
+          import logging
+          import datetime
+
+          #setup ENV Variable
+          SHUTDOWN_TAG_KEY = os.environ["SHUTDOWN_TAG_KEY"]
+          SHUTDOWN_TAG_VALUE_TRUE = os.environ["SHUTDOWN_TAG_VALUE_TRUE"]
+          
+
+
+          #setup simple logging for INFO
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          #define the connection
+          ec2 = boto3.resource('ec2')
+          rds = boto3.client('rds')
+
+          running_instances=[]
+          instances_to_shutdown=[]
+          def lambda_handler(event, context):
+              
+              ##############################Stopping EC2##################################
+              # Use the filter() method of the instances collection to retrieve
+              # all running EC2 instances.
+              
+              #Declaring filters
+              filters =[
+                  {
+                      'Name': 'instance-state-name', 
+                      'Values': ['running']
+                  },
+                  {
+                      'Name': 'tag:{}'.format(SHUTDOWN_TAG_KEY),
+                      'Values': [SHUTDOWN_TAG_VALUE_TRUE]
+                  }
+              ]
+              
+              #Filter the instances
+              instances = ec2.instances.filter(Filters=filters)
+              
+              #Locate all running instances
+              RunningInstances = [instance.id for instance in instances]
+              
+              #Make sure there are actually instances to shut down. 
+              if len(RunningInstances) > 0:
+                  
+                  
+                  #Perform the shutdown
+                  shuttingDown = ec2.instances.filter(InstanceIds=RunningInstances).stop()
+                  print ("Stopping EC2 Intances:",RunningInstances)
+              else:
+                  print ("Tagged EC2 instances are already stopped")
+              
+              
+              
+              ##############################Stopping RDS##################################
+              #Get the list of the RDS instances
+              rds_instances= rds.describe_db_instances()
+
+              RunningRDSInstances = []
+              
+              for instance in rds_instances["DBInstances"]:
+                  now = datetime.datetime.now()
+                  
+                  #Get all the tags assigend to RDS instance
+                  tags = rds.list_tags_for_resource(ResourceName=instance["DBInstanceArn"])["TagList"]
+                  for tag in tags:
+
+                      #Filtering instances based on the TAG key, value
+                      if tag['Key']==SHUTDOWN_TAG_KEY:
+                          if tag['Value'] ==SHUTDOWN_TAG_VALUE_TRUE and instance['DBInstanceStatus'] == 'available':
+      
+                              #Performing Shutdown
+                              rds.stop_db_instance(DBInstanceIdentifier=instance["DBInstanceIdentifier"])
+                              RunningRDSInstances.append(instance["DBInstanceIdentifier"])
+                              print ("Snapshot identifier:", instance["DBInstanceIdentifier"]+"-"+now.strftime("%Y-%m-%d-%H-%M-%S"))
+              
+              if len(RunningRDSInstances) > 0:
+                  print ("Stopping RDS Intances:", RunningRDSInstances)
+              else:
+                  print ("Tagged RDS instances are already stopped")    
+                        
+ 
+                        
+      Handler: lambda_function.lambda_handler
+      MemorySize: 128
+      Timeout: 60
+      Role:
+        Fn::GetAtt:
+          - LambdaRole
+          - Arn
+      Environment:
+        Variables:
+          SHUTDOWN_TAG_KEY: !Ref ShutdownTagKey
+          SHUTDOWN_TAG_VALUE_TRUE: !Ref ShutdownTagValueTrue
+          
+          ENV:
+            Fn::Sub: ${EnvName}
+          TZ: UTC
+
+  StartLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName:
+        Fn::Sub: AutoStartEC2RDS-${EnvName}
+      Description: LambdaFunction to Auto Start EC2 & RDS
+      Runtime: python3.7
+      Code:
+        ZipFile: |
+          import boto3
+          import os
+          import logging
+
+          #setup ENV Variable
+          START_TAG_KEY = os.environ["START_TAG_KEY"]
+          START_TAG_VALUE_TRUE = os.environ["START_TAG_VALUE_TRUE"]
+
+
+          #setup simple logging for INFO
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+          
+          #define the connection
+          ec2 = boto3.resource('ec2')
+          rds = boto3.client('rds')
+          client = boto3.client ('ec2')
+          def lambda_handler(event, context):
+            
+              ##############################Starting EC2##################################
+              
+              # Use the filter() method of the instances collection to retrieve
+              # all running EC2 instances.
+
+              #Declaring filter
+              filters =[
+                    {
+                      'Name': 'instance-state-name', 
+                      'Values': ['stopped']
+                  },      
+                  {
+                      'Name': 'tag:{}'.format(START_TAG_KEY), 
+                      'Values': [START_TAG_VALUE_TRUE]
+                  }
+              ]
+              #Filter the instances
+              instances = ec2.instances.filter(Filters=filters)
+              
+              #Locate all running instances
+              StoppedInstances = [instance.id for instance in instances]
+              
+              #Make sure there are actually instances to power on. 
+              
+              if len(StoppedInstances) > 0:
+                  
+                  #Start instances
+                  client.start_instances(InstanceIds=StoppedInstances)
+                  print ("Starting EC2 Intances:",StoppedInstances)
+              else:
+                  print ("Tagged EC2 instances are already started")
+
+              ##############################Starting RDS##################################
+
+              #Get the list of the RDS instances
+              instances= rds.describe_db_instances()
+              
+              StoppedRDSInstances = []
+              
+              for instance in instances["DBInstances"]:
+
+                  #Get all the tags assigend to RDS instance
+                  tags = rds.list_tags_for_resource(ResourceName=instance["DBInstanceArn"])["TagList"]
+                  for tag in tags:
+
+                      #Filtering instances based on the TAG key, value
+                      if tag['Key']==START_TAG_KEY:
+                          if tag['Value'] ==START_TAG_VALUE_TRUE and instance['DBInstanceStatus'] == 'stopped':
+                              StoppedRDSInstances.append(instance["DBInstanceIdentifier"])
+                              
+                              #Start Instances
+                              rds.start_db_instance(DBInstanceIdentifier=instance["DBInstanceIdentifier"])
+              
+              if len(StoppedRDSInstances) > 0:
+                  print ("Starting RDS Intances:", StoppedRDSInstances)
+              else:
+                  print ("Tagged RDS instances are already started")
+            
+                        
+      Handler: index.lambda_handler
+      MemorySize: 128
+      Timeout: 60
+      Role:
+        Fn::GetAtt:
+          - LambdaRole
+          - Arn
+      Environment:
+        Variables:
+          START_TAG_KEY: !Ref StartTagKey
+          START_TAG_VALUE_TRUE: !Ref StartTagValueTrue
+          ENV:
+            Fn::Sub: ${EnvName}
+          TZ: UTC
+
+  NotifyLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName:
+        Fn::Sub: NotifyRunningEC2RDS-${EnvName}
+      Description: LambdaFunction to Notify running EC2 & RDS
+      Runtime: python3.7
+      Code:
+        ZipFile: |
+          import boto3
+          import json
+          import os
+
+          #setup ENV Variable
+          SNS_TOPIC_ARN = os.environ["SNS_TOPIC_ARN"]
+
+          #define the connection
+          ec2 = boto3.resource('ec2')
+          rds = boto3.client('rds')
+
+          Running_EC2_Instances=[]
+          Running_RDS_Instances=[]
+          def lambda_handler(event, context):
+
+              ####################Notifying EC2################################
+
+              #Declaring filter
+              filters =[
+                  {
+                      'Name': 'instance-state-name', 
+                      'Values': ['running']
+                  }
+              ]
+
+              #Getting list of instances
+              instances = ec2.instances.filter(Filters=filters)
+                      
+              #Getting all running instances
+              Running_EC2_Instances = [instance.id for instance in instances]
+              #print ("Servers to shutdown", Running_EC2_Instances)
+              
+              ####################Notifying RDS################################
+              
+              #Getting all RDS instances
+              rds_instances= rds.describe_db_instances()
+
+              for instance in rds_instances["DBInstances"]:
+                
+                  if instance['DBInstanceStatus'] == 'available':
+                      
+                      #Getting all running instances
+                      Running_RDS_Instances.append(instance['DBInstanceIdentifier'])
+                      
+
+              message_sns = ()
+              if len(Running_EC2_Instances) > 0:
+                  message_ec2= ("Running EC2 instances ID(s) are:",Running_EC2_Instances)
+                  message_sns = message_ec2
+                  print (message_ec2)
+              else:
+                  print ("Nothing to notify, tagged EC2 instances are stopped")
+                 
+              if len(Running_RDS_Instances) > 0:
+                  message_rds= ("Running RDS instances ID(s) are:",Running_RDS_Instances)
+                  message_sns = message_sns + message_rds
+                  print (message_rds)
+              else:
+                  print ("Nothing to notify, tagged RDS instances are stopped")
+                  
+              if message_sns:
+                  message = message_sns
+                  client = boto3.client('sns')
+                  response= client.publish (
+                  TargetArn= SNS_TOPIC_ARN,
+                  Message = json.dumps({'default': json.dumps(message)}),
+                  MessageStructure='json'
+                  )
+              return True
+            
+                        
+      Handler: index.lambda_handler
+      MemorySize: 128
+      Timeout: 60
+      Role:
+        Fn::GetAtt:
+          - SNSRole
+          - Arn
+      Environment:
+        Variables:
+          SNS_TOPIC_ARN: !Ref SNSTopic
+          ENV:
+            Fn::Sub: ${EnvName}
+          TZ: UTC
+
+
+  TagLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName:
+        Fn::Sub: AutoTagEC2RDS-${EnvName}
+      Description: LambdaFunction to Notify running EC2 & RDS
+      Runtime: python3.7
+      Code:
+        ZipFile: |
+          import boto3
+          import logging
+          import os
+
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+          ec2 = boto3.resource('ec2')
+          rds = boto3.client('rds')
+
+          #setup ENV Variable
+          SHUTDOWN_TAG_KEY = os.environ["SHUTDOWN_TAG_KEY"]
+          SHUTDOWN_TAG_VALUE_TRUE = os.environ["SHUTDOWN_TAG_VALUE_TRUE"]
+          SHUTDOWN_TAG_VALUE_FALSE = os.environ["SHUTDOWN_TAG_VALUE_FALSE"]
+          START_TAG_KEY = os.environ["START_TAG_KEY"]
+          START_TAG_VALUE_TRUE = os.environ["START_TAG_VALUE_TRUE"]
+          START_TAG_VALUE_FALSE = os.environ["START_TAG_VALUE_FALSE"]
+
+          def lambda_handler(event, context):
+              
+              ##########################Tagging EC2#######################################
+              
+              #Declaring filter
+              filters = [
+                  {
+                      'Name': 'instance-state-name', 
+                      'Values': ['running']
+                  }
+                  
+              ]
+
+              #Getting all the instances based on the filter
+              instances = ec2.instances.filter(Filters=filters)
+
+              resource_id = [instance.id for instance in instances]
+              
+              unset = False
+              ec2_shutdown_tag_list=[]
+              ec2_shutdown_instance_list= ec2_shutdown_tag_list
+              ec2_start_tag_list = []
+              ec2_start_instance_list = ec2_start_tag_list
+              for instance in instances:
+                  
+                  ec2_shutdown_tag_list.append(instance.id)
+                  ec2_start_tag_list.append(instance.id)
+                  
+                  #Preparing list of instances which needs to be tagged
+                  if instance.tags:
+                      for tags in instance.tags:
+                          if (tags[u'Value'] == SHUTDOWN_TAG_VALUE_FALSE and tags[u'Key'] == SHUTDOWN_TAG_KEY) or (tags[u'Value'] == SHUTDOWN_TAG_VALUE_TRUE and tags[u'Key'] == SHUTDOWN_TAG_KEY):
+                              ec2_shutdown_instance_list.remove(instance.id)
+                          if (tags[u'Value'] == START_TAG_VALUE_FALSE and tags[u'Key'] == START_TAG_KEY) or (tags[u'Value'] == START_TAG_VALUE_TRUE and tags[u'Key'] == START_TAG_KEY):
+                              ec2_start_instance_list.remove(instance.id)
+                          
+              print ("Instances needs shutdown tag:",ec2_shutdown_tag_list)
+              print ("Instances needs start tag:", ec2_start_tag_list)
+
+              #Tagging instances with shutdown tag
+              if len(ec2_shutdown_tag_list)>0:
+                  ec2.create_tags(Resources=ec2_shutdown_instance_list, Tags=[{'Key':SHUTDOWN_TAG_KEY, 'Value':SHUTDOWN_TAG_VALUE_TRUE}])
+              else:
+                  print ("Instances are tagged appropriately with Shutdown tag")
+              
+              #Tagging instances with start tag
+              if len(ec2_start_tag_list)>0:
+                  ec2.create_tags(Resources=ec2_start_instance_list, Tags=[{'Key':START_TAG_KEY, 'Value':START_TAG_VALUE_TRUE}]) 
+              else:
+                  print ("Instances are tagged appropriately with Start tag")
+                  
+              
+              ##########################Tagging RDS#######################################
+              
+              
+              
+              #Getting all instances
+              rds_instances= rds.describe_db_instances()
+              
+              
+              for instance in rds_instances["DBInstances"]:
+                  tags_to_add = []
+                  required_tag_keys = [
+                  SHUTDOWN_TAG_KEY,
+                  START_TAG_KEY
+                  ]
+
+                  #Getting list of existing tags
+                  existing_tags = rds.list_tags_for_resource(ResourceName=instance["DBInstanceArn"])["TagList"]
+
+                  
+                  for existing_tag in existing_tags:
+                      
+                      existing_key_tag = existing_tag["Key"]
+                      
+                      if existing_key_tag in required_tag_keys:
+                          print("Required tag {} already set for {}".format(existing_key_tag, instance["DBInstanceIdentifier"]))
+                          required_tag_keys.remove(existing_key_tag)
+                          tags_to_add.append(existing_tag)
+                  tags_to_add += [
+                  {"Key": key, "Value": START_TAG_VALUE_TRUE}
+                  for key in required_tag_keys
+                  ]
+                  
+                  #Tagging instances
+                  rds.add_tags_to_resource(
+                      ResourceName=instance["DBInstanceArn"],
+                      Tags= tags_to_add
+                  )                  
+
+      Handler: index.lambda_handler
+      MemorySize: 128
+      Timeout: 60
+      Role:
+        Fn::GetAtt:
+          - LambdaRole
+          - Arn
+      Environment:
+        Variables:
+          START_TAG_KEY: !Ref StartTagKey
+          START_TAG_VALUE_TRUE: !Ref StartTagValueTrue
+          START_TAG_VALUE_FALSE: !Ref StartTagValueFalse
+          SHUTDOWN_TAG_KEY: !Ref ShutdownTagKey
+          SHUTDOWN_TAG_VALUE_TRUE: !Ref ShutdownTagValueTrue
+          SHUTDOWN_TAG_VALUE_FALSE: !Ref ShutdownTagValueFalse
+          ENV:
+            Fn::Sub: ${EnvName}
+          TZ: UTC
